@@ -1,0 +1,366 @@
+---
+title: "SL_final_proj"
+author: "Michele Maslowski"
+date: "2025-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls()) #Clear workspace
+
+library("tidyverse")          #For data manipulation
+library("ggplot2")            #For nice plots
+library('Metrics')
+library('gridExtra')
+library('dplyr')
+library("ISLR")
+library("glmnet")
+library("MASS")
+library("caret")
+library("splines")
+library("boot")
+library("class")
+library("nnet")
+library('Rmpfr')
+library('reshape2')
+library('pROC')
+library('themis')
+library('FNN')
+library('recipes')
+```
+
+```{r load data}
+data <- read.csv("/Users/wangjiaqi/Downloads/heart-attack-risk-analysis/train.csv", header = TRUE, sep = ",")
+
+# converting catergorical variables
+data$Sex <- factor(data$Sex)
+data$Sex <- as.numeric(data$Sex)
+
+data$Diet <- factor(data$Diet)
+data$Diet <- as.numeric(data$Diet)
+
+data$Country <- factor(data$Country)
+data$Country <- as.numeric(data$Country)
+
+data$Continent <- factor(data$Continent)
+data$Continent <- as.numeric(data$Continent)
+
+data$Hemisphere <- factor(data$Hemisphere)
+data$Hemisphere <- as.numeric(data$Hemisphere)
+
+# converting blood pressure to usable values
+data <- data %>%
+  separate(Blood.Pressure, into = c("systolic", "diastolic"), sep = "/") %>%
+  mutate(across(c(systolic, diastolic), as.numeric))
+
+# converting int to num
+data <- data %>%
+  mutate(across(where(is.integer), as.numeric))
+
+# check for NaNs
+NaNs = colSums(is.na(data))
+# no missing values 
+
+# remove sub ID 
+clean_data <- subset(data, select = -Patient.ID)
+
+```
+
+```{r}
+# Convert target variable to factor BEFORE splitting
+clean_data$Heart.Attack.Risk <- factor(clean_data$Heart.Attack.Risk, levels = c(0, 1), labels = c("NoRisk", "Risk"))
+
+set.seed(123)
+train_indices <- sample(1:nrow(clean_data), size = 0.8 * nrow(clean_data))
+train_data <- clean_data[train_indices, ]
+test_data  <- clean_data[-train_indices, ]
+
+```
+
+
+```{r}
+# Logistic
+# Logistic regression
+set.seed(123)
+logit_model <- glm(Heart.Attack.Risk ~ ., data = train_data, family = binomial)
+logit_probs <- predict(logit_model, newdata = test_data, type = "response")
+logit_pred <- factor(ifelse(logit_probs > 0.5, "Risk", "NoRisk"), levels = c("NoRisk", "Risk"))
+
+# Confusion matrix
+library(caret)
+logit_cm <- confusionMatrix(logit_pred, test_data$Heart.Attack.Risk)
+print(logit_cm)
+
+
+# ROC Curve
+roc_obj <- roc(test_data$Heart.Attack.Risk, logit_probs, levels = c("NoRisk", "Risk"))
+plot(roc_obj, main = "Logistic Regression ROC Curve")
+print(paste("AUC:", auc(roc_obj)))
+
+# Confusion matrix heatmap
+cm_df <- as.data.frame(logit_cm$table)
+ggplot(cm_df, aes(Prediction, Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "white", size = 6) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(title = "Logistic Regression Confusion Matrix", x = "Predicted", y = "Actual")
+
+```
+
+```{r}
+# Logistic with SMOTE
+### Automatic SMOTE Ratio Tuning
+set.seed(123)
+smote_ratios <- seq(0.1, 1.0, by = 0.1) # Range of SMOTE ratios to test
+auc_results <- data.frame(Ratio = smote_ratios, AUC = numeric(length(smote_ratios)))
+
+for (i in seq_along(smote_ratios)) {
+  ratio <- smote_ratios[i]
+  
+  # Apply SMOTE with this ratio
+  smote_recipe <- recipe(Heart.Attack.Risk ~ ., data = train_data) %>%
+    step_smote(Heart.Attack.Risk, over_ratio = ratio) %>%  
+    prep()
+  
+  smote_train <- bake(smote_recipe, new_data = NULL)
+  
+  # Train Logistic Regression
+  logit_model_smote <- glm(Heart.Attack.Risk ~ ., data = smote_train, family = binomial)
+  logit_probs_smote <- predict(logit_model_smote, newdata = test_data, type = "response")
+  
+  # Calculate AUC
+  roc_obj <- roc(test_data$Heart.Attack.Risk, logit_probs_smote, levels = c("NoRisk", "Risk"))
+  auc_results$AUC[i] <- auc(roc_obj)
+}
+
+# Find the best ratio
+best_ratio <- auc_results$Ratio[which.max(auc_results$AUC)]
+best_auc <- max(auc_results$AUC)
+print(paste("Best SMOTE Ratio:", best_ratio, "with AUC:", round(best_auc, 4)))
+
+# Visualize the SMOTE Ratio vs. AUC
+ggplot(auc_results, aes(x = Ratio, y = AUC)) +
+  geom_line(color = "dodgerblue", size = 1.2) +
+  geom_point(color = "darkorange", size = 2) +
+  geom_vline(xintercept = best_ratio, linetype = "dashed", color = "red") +
+  labs(title = "SMOTE Ratio vs. AUC (Optimized SMOTE)",
+       x = "SMOTE Over-Sampling Ratio",
+       y = "AUC") +
+  theme_minimal()
+
+### Apply Best SMOTE Ratio to Final Model
+smote_recipe_best <- recipe(Heart.Attack.Risk ~ ., data = train_data) %>%
+  step_smote(Heart.Attack.Risk, over_ratio = best_ratio) %>%  
+  prep()
+
+smote_train_best <- bake(smote_recipe_best, new_data = NULL)
+
+# Logistic Regression with Best SMOTE Ratio
+logit_model_best_smote <- glm(Heart.Attack.Risk ~ ., data = smote_train_best, family = binomial)
+logit_probs_best_smote <- predict(logit_model_best_smote, newdata = test_data, type = "response")
+logit_pred_best_smote <- factor(ifelse(logit_probs_best_smote > 0.5, "Risk", "NoRisk"), levels = c("NoRisk", "Risk"))
+
+# Confusion Matrix - Best SMOTE
+logit_cm_best_smote <- confusionMatrix(logit_pred_best_smote, test_data$Heart.Attack.Risk)
+print(logit_cm_best_smote)
+
+# ROC Curve for Best SMOTE
+roc_obj_best_smote <- roc(test_data$Heart.Attack.Risk, logit_probs_best_smote, levels = c("NoRisk", "Risk"))
+plot(roc_obj_best_smote, main = paste("Logistic Regression ROC Curve (Best SMOTE Ratio:", best_ratio, ")"))
+print(paste("AUC for Best SMOTE Model:", auc(roc_obj_best_smote)))
+
+# Confusion matrix heatmap
+cm_df <- as.data.frame(logit_cm_best_smote$table)
+ggplot(cm_df, aes(Prediction, Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "white", size = 6) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(title = "Logistic Regression (SMOTE) Confusion Matrix", x = "Predicted", y = "Actual")
+```
+
+
+
+```{r}
+# KNN
+library(FNN)
+set.seed(123)
+### ----- Scaling Data (Standardizing) -----
+# Identify numeric columns
+numeric_columns <- names(train_data)[sapply(train_data, is.numeric)]
+
+# Scaling with caret for consistency
+scaler <- preProcess(train_data[, numeric_columns], method = c("center", "scale"))
+train_data_scaled <- train_data
+test_data_scaled <- test_data
+
+train_data_scaled[numeric_columns] <- predict(scaler, train_data[, numeric_columns])
+test_data_scaled[numeric_columns] <- predict(scaler, test_data[, numeric_columns])
+
+# Separate predictors and target
+x_train <- as.matrix(train_data_scaled %>% dplyr::select(-Heart.Attack.Risk))
+x_test <- as.matrix(test_data_scaled %>% dplyr::select(-Heart.Attack.Risk))
+y_train <- train_data_scaled$Heart.Attack.Risk
+y_test <- test_data_scaled$Heart.Attack.Risk
+
+### ----- Weighted KNN: Finding Best K -----
+k_values <- seq(1, 100) # Testing odd values of K
+auc_scores <- numeric(length(k_values))
+
+for (i in seq_along(k_values)) {
+  k <- k_values[i]
+  
+  # Weighted KNN using inverse distance weights
+  knn_pred_probs <- FNN::knn.reg(train = x_train, test = x_train, y = as.numeric(y_train) - 1, 
+                                 k = k, algorithm = "kd_tree")$pred
+  
+  # Calculating AUC
+  roc_obj <- roc(y_train, knn_pred_probs)
+  auc_scores[i] <- auc(roc_obj)
+}
+
+# Best K with highest AUC
+best_k <- k_values[which.max(auc_scores)]
+print(paste("Best K for Weighted KNN:", best_k))
+
+# Plot AUC vs K values
+auc_df <- data.frame(K = k_values, AUC = auc_scores)
+ggplot(auc_df, aes(x = K, y = AUC)) +
+  geom_line(color = "dodgerblue", size = 1.2) +
+  geom_point(color = "darkorange", size = 2) +
+  geom_vline(xintercept = best_k, linetype = "dashed", color = "red") +
+  labs(title = "Weighted KNN: AUC vs. K Values", x = "K (Number of Neighbors)", y = "AUC") +
+  theme_minimal()
+
+### ----- Weighted KNN with Best K on Test Set -----
+knn_pred_probs_best <- FNN::knn.reg(train = x_train, test = x_test, y = as.numeric(y_train) - 1, 
+                                    k = best_k, algorithm = "kd_tree")$pred
+
+# Convert probabilities to binary predictions (0.5 threshold)
+knn_pred_final <- factor(ifelse(knn_pred_probs_best > 0.5, "Risk", "NoRisk"), levels = c("NoRisk", "Risk"))
+
+# Confusion Matrix for Weighted KNN
+knn_cm <- confusionMatrix(knn_pred_final, y_test)
+print(knn_cm)
+
+# ROC Curve and AUC for Weighted KNN
+roc_obj_weighted_knn <- roc(y_test, knn_pred_probs_best)
+plot(roc_obj_weighted_knn, main = paste("Weighted KNN ROC Curve (Best K =", best_k, ")"))
+print(paste("AUC for Weighted KNN Model:", auc(roc_obj_weighted_knn)))
+```
+
+```{r}
+# KNN SMOTE
+### ----- Apply SMOTE to Training Data -----
+smote_recipe <- recipe(Heart.Attack.Risk ~ ., data = train_data) %>%
+  step_smote(Heart.Attack.Risk, over_ratio = 1) %>%  # 1:1 class balance
+  prep()
+
+smote_train <- bake(smote_recipe, new_data = NULL)
+
+# Check class balance after SMOTE
+table(smote_train$Heart.Attack.Risk)
+
+### ----- Scaling Data (Standardizing) -----
+# Identify numeric columns
+numeric_columns <- names(smote_train)[sapply(smote_train, is.numeric)]
+
+# Scaling with caret for consistency
+scaler <- preProcess(smote_train[, numeric_columns], method = c("center", "scale"))
+smote_train_scaled <- smote_train
+test_data_scaled <- test_data
+
+smote_train_scaled[numeric_columns] <- predict(scaler, smote_train[, numeric_columns])
+test_data_scaled[numeric_columns] <- predict(scaler, test_data[, numeric_columns])
+
+# Separate predictors and target
+x_train <- as.matrix(smote_train_scaled %>% dplyr::select(-Heart.Attack.Risk))
+x_test <- as.matrix(test_data_scaled %>% dplyr::select(-Heart.Attack.Risk))
+y_train <- smote_train_scaled$Heart.Attack.Risk
+y_test <- test_data_scaled$Heart.Attack.Risk
+
+### ----- Optimizing K for KNN (SMOTE Data) -----
+set.seed(123)
+k_values <- seq(1, 100) # Testing odd values of K
+auc_scores <- numeric(length(k_values))
+
+for (i in seq_along(k_values)) {
+  k <- k_values[i]
+  knn_pred_cv <- knn(x_train, x_train, cl = y_train, k = k) # Using SMOTE training data for cross-validation
+  auc_cv <- roc(y_train, as.numeric(knn_pred_cv == "Risk"))$auc
+  auc_scores[i] <- auc_cv
+}
+
+# Best K with highest AUC
+best_k <- k_values[which.max(auc_scores)]
+print(paste("Best K for SMOTE KNN:", best_k))
+
+# Plot AUC vs K values
+auc_df <- data.frame(K = k_values, AUC = auc_scores)
+ggplot(auc_df, aes(x = K, y = AUC)) +
+  geom_line(color = "dodgerblue", size = 1.2) +
+  geom_point(color = "darkorange", size = 2) +
+  geom_vline(xintercept = best_k, linetype = "dashed", color = "red") +
+  labs(title = "SMOTE KNN: AUC vs. K Values", x = "K (Number of Neighbors)", y = "AUC") +
+  theme_minimal()
+
+### ----- Final KNN Model with Best K -----
+knn_pred_smote <- knn(x_train, x_test, cl = y_train, k = best_k)
+
+# Confusion Matrix for SMOTE KNN
+knn_cm_smote <- confusionMatrix(knn_pred_smote, y_test)
+print(knn_cm_smote)
+
+# ROC Curve and AUC for SMOTE KNN
+roc_smote_knn <- roc(y_test, as.numeric(knn_pred_smote == "Risk"))
+plot(roc_smote_knn, main = paste("SMOTE KNN ROC Curve (Best K =", best_k, ")"))
+print(paste("AUC for SMOTE KNN Model:", auc(roc_smote_knn)))
+```
+
+
+```{r}
+### ----- Calculate Precision, Recall, F1-Score Function -----
+calculate_metrics <- function(cm) {
+  precision <- cm$byClass["Pos Pred Value"]
+  recall <- cm$byClass["Sensitivity"]
+  f1 <- (2 * precision * recall) / (precision + recall)
+  return(c(Precision = precision, Recall = recall, F1_Score = f1))
+}
+
+### ----- Calculate Metrics for Logistic Regression -----
+# Logistic Regression (Original)
+logit_metrics_original <- calculate_metrics(logit_cm)
+
+# Logistic Regression (SMOTE)
+logit_metrics_smote <- calculate_metrics(logit_cm_best_smote)
+
+### ----- Calculate Metrics for KNN -----
+# KNN (Original)
+knn_metrics_original <- calculate_metrics(knn_cm)
+
+# KNN (SMOTE)
+knn_metrics_smote <- calculate_metrics(knn_cm_smote)
+
+### ----- Combine All Metrics for Comparison -----
+metrics_df <- data.frame(
+  Model = rep(c("Logistic (Original)", "Logistic (SMOTE)", 
+                "KNN (Original)", "KNN (SMOTE)"), each = 3),
+  Metric = rep(c("Precision", "Recall", "F1_Score"), 4),
+  Value = c(logit_metrics_original, logit_metrics_smote,
+            knn_metrics_original, knn_metrics_smote)
+)
+
+### ----- Plotting the Metrics Comparison -----
+library(ggplot2)
+ggplot(metrics_df, aes(x = Metric, y = Value, fill = Model)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.7), width = 0.6) +
+  geom_text(aes(label = round(Value, 3)), vjust = -0.3, 
+            position = position_dodge(width = 0.7), size = 4) +
+  labs(title = "Precision, Recall, F1-Score Comparison: Logistic vs. KNN", 
+       y = "Value", x = "Metric") +
+  theme_minimal() +
+  scale_fill_manual(values = c("dodgerblue", "darkorange", "darkgreen", "purple"))
+
+```
+

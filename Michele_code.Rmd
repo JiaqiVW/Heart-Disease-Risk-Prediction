@@ -1,0 +1,153 @@
+---
+title: "SL_final_proj"
+author: "Michele Maslowski"
+date: "2025-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls()) #Clear workspace
+
+library("tidyverse")          #For data manipulation
+library("ggplot2")            #For nice plots
+library('Metrics')
+library('gridExtra')
+library('dplyr')
+library("ISLR")
+library("glmnet")
+library("MASS")
+library("caret")
+library("splines")
+library("boot")
+library("class")
+library("nnet")
+library('Rmpfr')
+library('reshape2')
+library('pROC')
+library(e1071)  
+
+```
+
+```{r load data}
+
+data <- read.csv("C:/Users/mmasl/OneDrive - Marquette University/Desktop/Statistical Learning/final_proj/train.csv", header = TRUE, sep = ",")
+# converting catergorical variables
+data$Sex <- factor(data$Sex)
+data$Sex <- as.numeric(data$Sex)
+
+data$Diet <- factor(data$Diet)
+data$Diet <- as.numeric(data$Diet)
+
+data$Country <- factor(data$Country)
+data$Country <- as.numeric(data$Country)
+
+data$Continent <- factor(data$Continent)
+data$Continent <- as.numeric(data$Continent)
+
+data$Hemisphere <- factor(data$Hemisphere)
+data$Hemisphere <- as.numeric(data$Hemisphere)
+
+# converting blood pressure to usable values
+data <- data %>%
+  separate(Blood.Pressure, into = c("systolic", "diastolic"), sep = "/") %>%
+  mutate(across(c(systolic, diastolic), as.numeric))
+
+# converting int to num
+data <- data %>%
+  mutate(across(where(is.integer), as.numeric))
+
+# check for NaNs
+NaNs = colSums(is.na(data))
+# no missing values 
+
+# remove sub ID 
+clean_data <- subset(data, select = -Patient.ID)
+
+```
+
+```{r feature Correlation}
+
+cor_matrix <- cor(clean_data, use = "complete.obs", method = "pearson")
+cor_matrix_melted <- melt(cor_matrix)
+
+# Plot the heatmap with correlation numbers using ggplot2
+ggplot(cor_matrix_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = NULL, y = NULL, fill = "Correlation") +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3)
+
+
+# test train split 
+train_indices <- sample(1:nrow(clean_data), size = 0.8 * nrow(clean_data))
+
+# split
+train_data <- clean_data[train_indices, ]
+test_data <- clean_data[-train_indices, ]
+
+test_label <- as.factor(test_data$Heart.Attack.Risk)
+#test_data <- dplyr::select(test_data, -Heart.Attack.Risk)
+
+```
+
+```{r SVM (predicting heart attack (0 / 1))}
+train_data$Heart.Attack.Risk <- factor(train_data$Heart.Attack.Risk, levels = c(0, 1))
+test_data$Heart.Attack.Risk <- factor(test_data$Heart.Attack.Risk, levels = c(0, 1))
+
+# Train the model
+svm_model <- svm(Heart.Attack.Risk ~ ., data = train_data, kernel = "radial")
+
+# Predict class labels (no "type = response")
+svm_pred <- predict(svm_model, newdata = test_data)
+
+# Confusion matrix
+conf_matrix = confusionMatrix(svm_pred, test_data$Heart.Attack.Risk)
+
+conf_matrix_df <- as.data.frame(as.table(conf_matrix))
+
+conf_matrix_melt <- melt(conf_matrix_df, id.vars = c("Reference", "Prediction"))
+
+ggplot(conf_matrix_melt, aes(x = Prediction, y = Reference, fill = value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = value), color = "black", size = 6) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(title = "Confusion Matrix", x = "Predicted", y = "True") +
+  theme(
+    plot.title = element_text(hjust = 1),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+roc_obj <- roc(test_label, as.numeric(svm_pred))
+plot(roc_obj, col = "blue", main = "ROC Curve for SVM")
+
+precision <- conf_matrix$byClass["Precision"]
+recall <- conf_matrix$byClass["Recall"]
+
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+```
+
+```{r PCA }
+
+pca_result <- prcomp(train_data[, -ncol(train_data)], center = TRUE, scale. = TRUE)
+pc_scores <- data.frame(pca_result$x[, 1:5])
+pc_scores$Heart.Attack.Risk <- train_data$Heart.Attack.Risk
+ggplot(pc_scores, aes(x = PC1, y = PC2, color = Heart.Attack.Risk)) +
+  geom_point(size = 3, alpha = 0.8) +
+  labs(title = "PCA: First Two Principal Components",
+       x = "Principal Component 1",
+       y = "Principal Component 2") +
+  theme_minimal() +
+  scale_color_manual(values = c("0" = "red", "1" = "blue"))
+
+# finding the best component
+
+explained_var <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+plot(explained_var, type = "b", xlab = "Principal Component", ylab = "Proportion of Variance Explained")
+```
+

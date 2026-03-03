@@ -1,0 +1,516 @@
+---
+title: "SL_final_proj"
+author: "Vanessa Lattas"
+date: "2025-04-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls()) #Clear workspace
+
+library("tidyverse")          #For data manipulation
+library("ggplot2")            #For nice plots
+library('Metrics')
+library('gridExtra')
+library('dplyr')
+library("ISLR")
+library("glmnet")
+library("MASS")
+library("caret")
+library("splines")
+library("boot")
+library("class")
+library("nnet")
+library('Rmpfr')
+library('reshape2')
+library('pROC')
+```
+
+```{r load data}
+
+data <- read.csv("~/Desktop/train.csv", header = TRUE, sep = ",")
+# converting categorical variables
+data$Sex <- factor(data$Sex)
+data$Sex <- as.numeric(data$Sex)
+
+data$Diet <- factor(data$Diet)
+data$Diet <- as.numeric(data$Diet)
+
+data$Country <- factor(data$Country)
+data$Country <- as.numeric(data$Country)
+
+data$Continent <- factor(data$Continent)
+data$Continent <- as.numeric(data$Continent)
+
+data$Hemisphere <- factor(data$Hemisphere)
+data$Hemisphere <- as.numeric(data$Hemisphere)
+
+data$Stress.Level <- factor(data$Stress.Level)
+data$Stress.Level <- as.numeric(data$Stress.Level)
+
+# converting blood pressure to usable values
+data <- data %>%
+  separate(Blood.Pressure, into = c("systolic", "diastolic"), sep = "/") %>%
+  mutate(across(c(systolic, diastolic), as.numeric))
+
+# converting int to num
+data <- data %>%
+  mutate(across(where(is.integer), as.numeric))
+
+# check for NaNs
+NaNs = colSums(is.na(data))
+# no missing values 
+
+# remove sub ID 
+clean_data <- subset(data, select = -Patient.ID)
+
+# Load libraries
+library(ggplot2)
+library(dplyr)
+
+# Plot Age Distribution
+ggplot(clean_data, aes(x = Age, fill = as.factor(Heart.Attack.Risk))) +
+  geom_histogram(binwidth = 5, position = "stack", color = "black") +
+  labs(
+       x = "Age", y = "Count",
+       fill = "Heart Attack Risk") +
+  scale_fill_manual(values = c("gray", "red"), labels = c("No Risk", "At Risk"))
+
+
+# Plot Heart Attack Risk by Sex
+ggplot(clean_data, aes(x = as.factor(Sex), fill = as.factor(Heart.Attack.Risk))) +
+  geom_bar(position = "fill") +
+  labs(title = "Heart Attack Risk by Sex", x = "Sex", y = "Proportion") +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk") +
+  scale_x_discrete(labels = c("1" = "Male", "2" = "Female"))
+
+# Plot BMI vs Age Colored by Risk
+ggplot(clean_data, aes(x = Age, y = BMI, color = as.factor(Heart.Attack.Risk))) +
+  geom_point(alpha = 0.6) +
+  labs( x = "Age", y = "BMI") +
+  scale_color_manual(values = c("blue", "red"), name = "Heart Attack Risk")
+library(ggplot2)
+
+# Plot BMI by Heart Attack Risk
+ggplot(clean_data, aes(x = as.factor(Heart.Attack.Risk), y = BMI, fill = as.factor(Heart.Attack.Risk))) +
+  geom_boxplot(alpha = 0.7, color = "black") +
+  labs(x = "Heart Attack Risk",
+       y = "BMI",
+       fill = "Heart Attack Risk") +
+  scale_fill_manual(values = c("gray", "red"),
+                    labels = c("0" = "No Risk", "1" = "At Risk")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"  # remove redundant legend
+  )
+
+
+# Plot Heart Attack Risk by Physical Activity
+ggplot(clean_data, aes(x = as.factor(Heart.Attack.Risk), y = Physical.Activity.Days.Per.Week)) +
+  geom_boxplot(fill = "skyblue") +
+  labs(title = "Physical Activity vs Heart Attack Risk", x = "Heart Attack Risk", y = "Activity Days per Week")
+
+
+# Plot Heart Attack Risk by Country
+ggplot(clean_data, aes(x = as.factor(Country), fill = as.factor(Heart.Attack.Risk))) +
+  geom_bar(position = "fill") +
+  labs(x = "Country", y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk")
+
+# Plot Heart Attack Risk by Smoking Status
+ggplot(clean_data, aes(x = as.factor(Smoking), fill = as.factor(Heart.Attack.Risk))) +
+  geom_bar(position = "fill") +
+  labs(x = "Smoking (0 = No, 1 = Yes)",
+       y = "Proportion") +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk")
+
+# Plot Heart Attack Risk by Diabetes Status
+ggplot(clean_data, aes(x = as.factor(Diabetes), fill = as.factor(Heart.Attack.Risk))) +
+  geom_bar(position = "fill") +
+  labs(x = "Diabetes (0 = No, 1 = Yes)",
+       y = "Proportion") +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk")
+
+# Plot Heart Attack Risk by Physical Activity
+library(ggplot2)
+
+ggplot(clean_data, aes(x = Physical.Activity.Days.Per.Week, fill = as.factor(Heart.Attack.Risk))) +
+  geom_histogram(position = "dodge", bins = 15, color = "black", alpha = 0.7) +
+  labs(x = "Physical Activity Days Per Week",
+       y = "Count",
+       fill = "Heart Attack Risk") +
+  scale_fill_manual(values = c("gray", "red"),
+                    labels = c("0" = "0", "1" = "1")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "right"
+  )
+
+# Plot Heart Attack Risk by Obesity status
+ggplot(clean_data, aes(x = as.factor(Obesity), fill = as.factor(Heart.Attack.Risk))) +
+  geom_bar(position = "fill") +
+  labs(x = "Obesity (0 = No, 1 = Yes)", y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk")
+
+# Plot Heart Attack Risk by Family History
+ggplot(clean_data, aes(x = as.factor(Family.History), fill = as.factor(Heart.Attack.Risk))) +
+  geom_bar(position = "fill") +
+  labs(x = "Family History (0 = No, 1 = Yes)", y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk")
+
+
+# Boxplot of Cholesterol by Heart Attack Risk
+ggplot(clean_data, aes(x = as.factor(Heart.Attack.Risk), y = Cholesterol, fill = as.factor(Heart.Attack.Risk))) +
+  geom_boxplot() +
+  labs(x = "Heart Attack Risk (0 = No, 1 = Yes)", y = "Cholesterol Level") +
+  scale_fill_manual(values = c("gray", "red"), name = "Heart Attack Risk") +
+  theme(legend.position = "none")
+
+```
+
+SMOTE TO HANDLE CLASS IMBALANCE
+
+```{r}
+install.packages("themis")
+library(themis)
+library(recipes)
+
+set.seed(123)
+
+cat("\n Class distribution BEFORE SMOTE:\n")
+print(table(clean_data$Heart.Attack.Risk))
+print(prop.table(table(clean_data$Heart.Attack.Risk)))
+
+# Ensure response is factor
+clean_data$Heart.Attack.Risk <- factor(clean_data$Heart.Attack.Risk)
+
+# Create a recipe with SMOTE
+recipe_balanced <- recipe(Heart.Attack.Risk ~ ., data = clean_data) %>%
+  step_smote(Heart.Attack.Risk, over_ratio = 0.85)  
+
+balanced_data <- prep(recipe_balanced) %>% bake(new_data = NULL)
+table(balanced_data$Heart.Attack.Risk)  # Check balance
+
+cat("\n Class distribution AFTER SMOTE:\n")
+print(table(balanced_data$Heart.Attack.Risk))
+print(prop.table(table(balanced_data$Heart.Attack.Risk)))
+
+
+```
+
+SPLIT TRAIN/TEST
+
+```{r}
+# Load required packages
+library(randomForest)
+library(caret)
+library(themis)
+library(recipes)
+library(dplyr)
+library(tidyr)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Split data into training and testing sets (80/20 split)
+train_index <- createDataPartition(balanced_data$Heart.Attack.Risk, p = 0.8, list = FALSE)
+train_data <- balanced_data[train_index, ]
+test_data <- balanced_data[-train_index, ]
+
+```
+
+RANDOM FOREST
+
+```{r}
+# Load required libraries
+library(randomForest)
+library(caret)
+library(pROC)
+
+# Fit random forest model
+rf_model <- randomForest(
+  Heart.Attack.Risk ~ ., 
+  data = train_data,
+  importance=TRUE)
+
+# Print model summary
+print(rf_model)
+
+# Make predictions on test set
+rf_pred <- predict(rf_model, newdata = test_data)
+
+# Confusion matrix
+conf_matrix <- confusionMatrix(rf_pred, test_data$Heart.Attack.Risk, positive = "1")
+print(conf_matrix)
+# Extract matrix and reshape for ggplot
+cm_table <- as.table(conf_matrix$table)
+cm_df <- as.data.frame(cm_table)
+colnames(cm_df) <- c("True", "Predicted", "Freq")
+
+# Plot using ggplot2
+ggplot(cm_df, aes(x = Predicted, y = True, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), size = 8) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix", fill = "Count") +
+  theme_minimal(base_size = 15) +
+  coord_fixed()
+
+## ----------------------------
+## Compute F1 Score (manual)
+## ----------------------------
+
+tp <- conf_matrix$table["1", "1"]
+fp <- conf_matrix$table["0", "1"]
+fn <- conf_matrix$table["1", "0"]
+
+precision <- tp / (tp + fp)
+recall <- tp / (tp + fn)
+f1_rf <- ifelse((precision + recall) == 0, 0, 2 * precision * recall / (precision + recall))
+
+cat("Random Forest F1 Score (manual):", f1_rf, "\n")
+
+## ----------------------------
+## ROC Curve and AUC
+## ----------------------------
+
+# Get predicted probabilities for class "1"
+rf_probs <- predict(rf_model, newdata = test_data, type = "prob")[, "1"]
+
+roc_obj <- roc(test_data$Heart.Attack.Risk, rf_probs)
+plot(roc_obj, main = "ROC Curve for Random Forest")
+
+cat("Random Forest AUC:", auc(roc_obj), "\n")
+
+## ----------------------------
+## Variable Importance Plot
+## ----------------------------
+
+varImpPlot(rf_model, 
+           main = "Variable Importance Plot",
+           cex = 0.8)        # Adjust text size if needed
+
+```
+
+K MEANS CLUSTERING, K MEDOIDS
+
+```{r}
+library(caret)
+library(cluster)
+library(pROC)
+library(MLmetrics)
+library(dplyr)
+
+# Drop non-numeric (categorical) variables for clustering
+exclude_vars <- c("Heart.Attack.Risk", "Sex", "Hemisphere", "Continent", "Country", "Diet")
+kmeans_data <- balanced_data[, !(names(balanced_data) %in% exclude_vars)]
+str(kmeans_data)
+
+# Scale numeric data
+kmeans_data <- scale(kmeans_data)
+
+# Ensure true labels are 0/1 factor
+true_labels <- as.numeric(as.character(balanced_data$Heart.Attack.Risk))
+true_labels <- factor(true_labels, levels = c(0, 1))
+
+# ==========================
+# K-MEANS CLASSIFIER
+# ==========================
+
+set.seed(123)
+kmeans_model <- kmeans(kmeans_data, centers = 2, nstart = 25)
+
+# Cluster-to-label table
+cluster_map <- table(kmeans_model$cluster, true_labels)
+cat("\n K-means cluster-to-label mapping:\n")
+print(cluster_map)
+
+# Determine best global mapping
+agreement1 <- cluster_map[1, "0"] + cluster_map[2, "1"]
+agreement2 <- cluster_map[1, "1"] + cluster_map[2, "0"]
+
+if (agreement1 > agreement2) {
+  cluster_to_class <- c("0", "1")
+} else {
+  cluster_to_class <- c("1", "0")
+}
+
+# Predict classes
+kmeans_pred <- factor(cluster_to_class[kmeans_model$cluster], levels = c("0", "1"))
+
+# Confusion Matrix for K-means
+cm_kmeans <- confusionMatrix(kmeans_pred, true_labels, positive = "1")
+cat("\n K-means Accuracy:", cm_kmeans$overall["Accuracy"], "\n")
+print(cm_kmeans)
+# Extract matrix and reshape for ggplot
+cm_table <- as.table(cm_kmeans$table)
+cm_df <- as.data.frame(cm_table)
+colnames(cm_df) <- c("True", "Predicted", "Freq")
+
+# Plot using ggplot2
+ggplot(cm_df, aes(x = Predicted, y = True, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), size = 8) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix", fill = "Count") +
+  theme_minimal(base_size = 15) +
+  coord_fixed()
+
+
+
+# Compute F1 Score
+f1_kmeans <- F1_Score(y_pred = kmeans_pred, y_true = true_labels, positive = "1")
+cat("\n K-means F1 Score (positive = 1):", f1_kmeans, "\n")
+
+# ROC curve and AUC
+kmeans_prob <- as.numeric(kmeans_pred == "1")
+roc_kmeans <- roc(as.numeric(as.character(true_labels)), kmeans_prob)
+plot(roc_kmeans, main = "K-means ROC Curve")
+cat(" K-means AUC:", auc(roc_kmeans), "\n")
+
+
+```
+
+K MEDOIDS
+
+```{r}
+# ==========================
+# K-MEDOIDS CLASSIFIER (performed worse, did NOT report in paper)
+# ==========================
+
+set.seed(123)
+kmedoids_model <- pam(kmeans_data, k = 2)
+
+# Cluster-to-label table
+cluster_map_med <- table(kmedoids_model$clustering, true_labels)
+cat("\n K-medoids cluster-to-label mapping:\n")
+print(cluster_map_med)
+
+# Determine best global mapping
+agreement1_med <- cluster_map_med[1, "0"] + cluster_map_med[2, "1"]
+agreement2_med <- cluster_map_med[1, "1"] + cluster_map_med[2, "0"]
+
+if (agreement1_med > agreement2_med) {
+  cluster_to_class_med <- c("0", "1")
+} else {
+  cluster_to_class_med <- c("1", "0")
+}
+
+# Predict classes
+kmedoids_pred <- factor(cluster_to_class_med[kmedoids_model$clustering], levels = c("0", "1"))
+
+# Confusion Matrix for K-medoids
+cm_kmedoids <- confusionMatrix(kmedoids_pred, true_labels, positive = "1")
+cat("\n K-medoids Accuracy:", cm_kmedoids$overall["Accuracy"], "\n")
+print(cm_kmedoids)
+
+# Compute F1 Score
+f1_kmedoids <- F1_Score(y_pred = kmedoids_pred, y_true = true_labels, positive = "1")
+cat("\n K-medoids F1 Score (positive = 1):", f1_kmedoids, "\n")
+
+# ROC curve and AUC
+kmedoids_prob <- as.numeric(kmedoids_pred == "1")
+roc_kmedoids <- roc(as.numeric(as.character(true_labels)), kmedoids_prob)
+plot(roc_kmedoids, main = "K-medoids ROC Curve")
+cat("K-medoids AUC:", auc(roc_kmedoids), "\n")
+
+
+```
+
+NAIVE BAYES
+
+```{r}
+# Load required libraries
+library(e1071)       # For Naive Bayes
+library(caret)       # For confusion matrix
+library(pROC)        # For ROC curve
+
+# non-ordered categorical predictors, don't want to treat them as numeric here
+balanced_data$Country <- factor(balanced_data$Country)
+balanced_data$Hemisphere <- factor(balanced_data$Hemisphere)
+balanced_data$Continent <- factor(balanced_data$Hemisphere)
+balanced_data$Diet <- factor(balanced_data$Diet)
+
+## ----------------------------
+## Train Naive Bayes Model
+## ----------------------------
+
+# Train model with Laplace smoothing
+nb_model <- naiveBayes(
+  Heart.Attack.Risk ~ ., 
+  data = train_data,
+  laplace = 1          # Prevents zero probabilities
+)
+
+# View model summary
+print(nb_model)
+
+## ----------------------------
+## Make Predictions
+## ----------------------------
+
+# Predict class probabilities
+nb_probs <- predict(nb_model, newdata = test_data, type = "raw")
+
+# Predict class labels
+nb_pred <- predict(nb_model, newdata = test_data)
+
+## ----------------------------
+## Evaluate Performance
+## ----------------------------
+
+# Confusion matrix
+conf_matrix <- confusionMatrix(
+  nb_pred,
+  test_data$Heart.Attack.Risk,
+  positive = "1"       # Assuming "1" is the positive class (heart attack risk)
+)
+
+# Print detailed metrics
+print(conf_matrix)
+
+# Extract matrix and reshape for ggplot
+cm_table <- as.table(conf_matrix$table)
+cm_df <- as.data.frame(cm_table)
+colnames(cm_df) <- c("True", "Predicted", "Freq")
+
+# Plot using ggplot2
+ggplot(cm_df, aes(x = Predicted, y = True, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), size = 8) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Confusion Matrix", fill = "Count") +
+  theme_minimal(base_size = 15) +
+  coord_fixed()
+
+## ----------------------------
+## Compute F1 Score
+## ----------------------------
+
+# Method 2: Manual F1 calculation
+tp <- conf_matrix$table["1", "1"]
+fp <- conf_matrix$table["0", "1"]
+fn <- conf_matrix$table["1", "0"]
+
+precision <- tp / (tp + fp)
+recall <- tp / (tp + fn)
+f1_nb <- ifelse((precision + recall) == 0, 0, 2 * precision * recall / (precision + recall))
+
+cat("Naive Bayes F1 Score (manual):", f1_nb, "\n")
+
+## ----------------------------
+## ROC Curve (requires probability predictions)
+## ----------------------------
+
+roc_obj <- roc(test_data$Heart.Attack.Risk, nb_probs[, "1"])
+plot(roc_obj, main = "ROC Curve for Naive Bayes")
+cat("Naive Bayes AUC:", auc(roc_obj), "\n")
+
+```
